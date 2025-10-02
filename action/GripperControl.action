@@ -1,0 +1,13 @@
+# Goal
+uint8 GRIP = 0     # 抓取动作
+uint8 RELEASE = 1  # 释放动作
+uint8 command      # 要执行的命令
+
+---
+# Result
+bool success       # 是否成功完成
+string message     # 执行结果消息
+
+---
+# Feedback
+int16 current_position  # 当前位置反馈
