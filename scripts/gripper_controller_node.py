@@ -42,6 +42,7 @@ class ServoController:
         # 角度参数 (可修改)
         self.grip_angle = 89      # 抓取角度 (度)
         self.release_angle = 60  # 释放角度 (度)
+        self.MOVE_DURI = 1000    # 作动耗时
         
         # 连接串口
         self.connect()
@@ -159,7 +160,7 @@ class ServoController:
             是否成功
         """
         pulse = self.angle_to_pulse(angle)
-        command = f"#000P{pulse:04d}!\r\n"
+        command = f"#000P{pulse:04d}T{self.MOVE_DURI}!\r\n"
         
         rospy.loginfo(f"🎯 Moving servo to {angle}° (pulse: {pulse})")
         response = self.send_command(command)
@@ -238,7 +239,7 @@ class GripperControllerNode:
         # 获取参数
         self.port = rospy.get_param('~serial_port', '/dev/ttyUSB0')
         self.baudrate = rospy.get_param('~baudrate', 115200)
-        
+        self.LOG_SEC = 1
         # 初始化舵机控制器
         self.servo = ServoController(self.port, self.baudrate)
         
@@ -362,7 +363,7 @@ class GripperControllerNode:
             
             # 日志输出 (降低频率)
             if hasattr(self, '_last_log_time'):
-                if time.time() - self._last_log_time > 5.0:  # 每5秒输出一次
+                if time.time() - self._last_log_time > self.LOG_SEC:  # 每5秒输出一次
                     if status.is_online:
                         angle = self.servo.pulse_to_angle(status.position)
                         state_name = "GRIP" if status.state == GripperStatus.GRIP_STATE else "RELEASE"

@@ -16,6 +16,7 @@ Gripper Controller Test Client
 import rospy
 import sys
 import actionlib
+import time
 from gripper_controller.msg import GripperStatus, GripperControlAction, GripperControlGoal
 
 
@@ -92,10 +93,15 @@ if __name__ == "__main__":
         sys.exit(1)
     
     command = sys.argv[1].lower()
-    
+
     try:
         client = GripperTestClient()
         
+        while(1):
+            client.grip()
+            time.sleep(1)
+            client.release()
+            time.sleep(1)
         if command == "grip":
             client.grip()
         elif command == "release":
