@@ -40,8 +40,8 @@ class ServoController:
         self.lock = threading.Lock()
         
         # 角度参数 (可修改)
-        self.grip_angle = 0      # 抓取角度 (度)
-        self.release_angle = 90  # 释放角度 (度)
+        self.grip_angle = 89      # 抓取角度 (度)
+        self.release_angle = 60  # 释放角度 (度)
         
         # 连接串口
         self.connect()
