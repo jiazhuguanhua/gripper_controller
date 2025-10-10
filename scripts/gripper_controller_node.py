@@ -297,6 +297,10 @@ class GripperControllerNode:
                 self.action_server.set_aborted(result)
                 return
             
+            '''
+            # feedback部分 不必要
+            # client直接通过def read_position(self) -> Optional[int]去获取参数
+
             # 等待动作完成并发布反馈
             for i in range(10):  # 最多等待1秒
                 if rospy.is_shutdown() or self.action_server.is_preempt_requested():
@@ -315,7 +319,8 @@ class GripperControllerNode:
                         break
                 
                 rospy.sleep(0.1)
-            
+            '''
+
             # 设置结果
             result.success = success
             if success:
