@@ -240,6 +240,8 @@ class GripperControllerNode:
         self.port = rospy.get_param('~serial_port', '/dev/ttyUSB0')
         self.baudrate = rospy.get_param('~baudrate', 115200)
         self.LOG_SEC = 1
+        self.positioningaccuracy = 5
+
         # 初始化舵机控制器
         self.servo = ServoController(self.port, self.baudrate)
         
@@ -282,6 +284,7 @@ class GripperControllerNode:
             if goal.command == GripperControlGoal.GRIP:
                 rospy.loginfo("🎯 Executing GRIP action...")
                 success = self.servo.grip()
+                rospy.loginfo("gripper", str(success))
                 action_name = "grip"
             elif goal.command == GripperControlGoal.RELEASE:
                 rospy.loginfo("🎯 Executing RELEASE action...")
@@ -306,6 +309,10 @@ class GripperControllerNode:
                 if current_pulse is not None:
                     feedback.current_position = current_pulse
                     self.action_server.publish_feedback(feedback)
+                    diff = abs(self.servo.pulse_to_angle(current_pulse) - self.servo.grip_angle)
+                    if diff <= self.positioningaccuracy:
+                        # 到达目标位置
+                        break
                 
                 rospy.sleep(0.1)
             
