@@ -2,11 +2,34 @@
 
 基于ROS Noetic的夹爪控制器包，使用串口通信控制舵机夹爪。
 
+## 📚 文档导航
+
+**新用户请从这里开始：**
+
+1. 📖 **[INDEX.md](INDEX.md)** - 文档索引和导航中心
+2. 📘 **[COMMUNICATION_GUIDE.md](COMMUNICATION_GUIDE.md)** - 完整的通信API手册
+3. ⚡ **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - 快速参考卡
+
+## 🚀 快速开始（3步）
+
+```bash
+# 1. 启动节点
+rosrun gripper_controller gripper_controller_node_v2.py
+
+# 2. 测试连接（另一个终端）
+rostopic echo /gripper_status -n 1
+
+# 3. 执行动作
+python3 scripts/simple_client.py grip      # 抓取
+python3 scripts/simple_client.py release   # 释放
+```
+
 ## 功能特性
 
 - ✅ Action Server：处理抓取和释放动作
 - ✅ 串口通信：通过USB TTL模块与舵机通信
 - ✅ 状态发布：1Hz频率发布夹爪在线状态和位置
+- ✅ 自动重连：断线后自动尝试重新连接
 - ✅ 参数可调：抓取和释放角度可在代码中修改
 
 ## 硬件要求
@@ -20,7 +43,7 @@
 基于提供的舵机指令文档：
 
 - 初始化：`#000PMOD3!`
-- 位置控制：`#000P<pulse>!` (pulse: 500-2500)
+- 位置控制：`#000P<pulse>T<time>!` (pulse: 500-2500, time: 毫秒)
 - 位置读取：`#000PRAD!`
 - 响应格式：`#000P<pulse>!`
 

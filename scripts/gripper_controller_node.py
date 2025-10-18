@@ -284,7 +284,7 @@ class GripperControllerNode:
             if goal.command == GripperControlGoal.GRIP:
                 rospy.loginfo("🎯 Executing GRIP action...")
                 success = self.servo.grip()
-                rospy.loginfo("gripper", str(success))
+                rospy.loginfo(f"gripper {success}")
                 action_name = "grip"
             elif goal.command == GripperControlGoal.RELEASE:
                 rospy.loginfo("🎯 Executing RELEASE action...")

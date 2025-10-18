@@ -48,7 +48,7 @@ class ServoController:
     # 舵机通信协议常量
     SERVO_ID = "000"  # 舵机ID
     CMD_SET_MODE = "#{}PMOD{}!\r\n"  # 设置工作模式
-    CMD_READ_MODE = "#{}PMOD?!\r\n"  # 读取工作模式
+    CMD_READ_MODE = "#{}PMOD!\r\n"  # 读取工作模式
     CMD_MOVE_TIME = "#{}P{:04d}T{}!\r\n"  # 移动到指定位置(带时间)
     CMD_READ_POSITION = "#{}PRAD!\r\n"  # 读取当前位置
     
@@ -67,9 +67,9 @@ class ServoController:
         self.connection_state = ConnectionState.DISCONNECTED
         
         # 舵机参数配置
-        self.grip_angle = 89      # 抓取角度 (度)
+        self.grip_angle = 93      # 抓取角度 (度)
         self.release_angle = 60   # 释放角度 (度)
-        self.move_duration = 1000 # 移动耗时 (毫秒)
+        self.move_duration = 300 # 移动耗时 (毫秒)
         
         # 重连参数
         self.reconnect_interval = 2.0  # 重连尝试间隔 (秒)
@@ -105,7 +105,7 @@ class ServoController:
                 self.serial_conn = serial.Serial(
                     port=self.port,
                     baudrate=self.baudrate,
-                    timeout=0.5,  # 减少超时时间，提高响应速度
+                    timeout=1.0,  # 增加超时时间，给舵机更多响应时间
                     bytesize=serial.EIGHTBITS,
                     parity=serial.PARITY_NONE,
                     stopbits=serial.STOPBITS_ONE
@@ -115,20 +115,28 @@ class ServoController:
                 self.serial_conn.flushInput()
                 self.serial_conn.flushOutput()
                 
-                time.sleep(0.1)  # 等待串口稳定
+                time.sleep(0.2)  # 增加等待时间，让串口稳定
             
-            # 验证连接：使用读取工作模式指令
+            # 验证连接：使用读取位置指令
             if self.verify_connection():
                 self.connection_state = ConnectionState.CONNECTED
                 self.connection_attempts = 0
                 self.last_successful_connection = time.time()
                 rospy.loginfo(f"✅ 串口连接成功: {self.port}@{self.baudrate}")
                 
-                # 初始化舵机（设置为伺服模式）
-                self.initialize_servo()
+                # 初始化舵机（设置为伺服模式）- 初始化可能失败，但不影响连接状态
+                init_success = self.initialize_servo()
+                if init_success:
+                    rospy.loginfo("✅ 舵机初始化成功")
+                else:
+                    rospy.logwarn("⚠️ 舵机初始化失败，但连接正常，可继续使用")
+                
                 return True
             else:
-                rospy.logwarn("⚠️ 串口已打开但舵机无响应")
+                rospy.logwarn("⚠️ 串口已打开但舵机无响应，请检查：")
+                rospy.logwarn("   1. 舵机是否供电")
+                rospy.logwarn("   2. 串口连接是否正确")
+                rospy.logwarn("   3. 波特率是否匹配")
                 self.connection_state = ConnectionState.DISCONNECTED
                 if self.serial_conn:
                     self.serial_conn.close()
@@ -148,22 +156,30 @@ class ServoController:
     
     def verify_connection(self) -> bool:
         """
-        验证连接是否正常（使用读取工作模式指令）
+        验证连接是否正常（使用读取位置指令，因为舵机一定会响应位置查询）
         
         Returns:
             连接是否正常
         """
         try:
-            # 使用读取工作模式指令验证连接
-            command = self.CMD_READ_MODE.format(self.SERVO_ID)
-            response = self._send_raw_command(command, retry=1)
+            # 使用读取位置指令验证连接（更可靠）
+            command = self.CMD_READ_POSITION.format(self.SERVO_ID)
+            response = self._send_raw_command(command, retry=2)
             
-            if response and "PMOD" in response:
-                rospy.logdebug(f"✅ 舵机响应正常: {response}")
-                return True
-            else:
-                rospy.logdebug(f"❌ 舵机无响应或响应异常: {response}")
-                return False
+            # 检查响应格式：#000P1500!
+            if response and response.startswith(f"#{self.SERVO_ID}P") and response.endswith("!"):
+                try:
+                    # 尝试解析脉宽值以确保格式正确
+                    pulse_str = response[5:-1]
+                    pulse = int(pulse_str)
+                    if 500 <= pulse <= 2500:  # 有效脉宽范围
+                        rospy.logdebug(f"✅ 舵机响应正常: {response} (脉宽: {pulse})")
+                        return True
+                except (ValueError, IndexError):
+                    pass
+            
+            rospy.logdebug(f"❌ 舵机无响应或响应异常: {response}")
+            return False
                 
         except Exception as e:
             rospy.logdebug(f"❌ 连接验证失败: {e}")
@@ -204,9 +220,16 @@ class ServoController:
                     self.serial_conn.write(command.encode())
                     rospy.logdebug(f"📤 发送命令 (尝试{attempt+1}): {command.strip()}")
                     
-                    # 等待响应
-                    time.sleep(0.05)  # 给舵机一点时间处理
-                    response = self.serial_conn.readline().decode('utf-8', errors='ignore').strip()
+                    # 等待响应 - 增加等待时间
+                    time.sleep(0.1)  # 给舵机充足的处理时间
+                    
+                    # 读取所有可用数据
+                    response = ""
+                    while self.serial_conn.in_waiting > 0:
+                        response += self.serial_conn.read(self.serial_conn.in_waiting).decode('utf-8', errors='ignore')
+                        time.sleep(0.01)  # 短暂等待，确保读取完整
+                    
+                    response = response.strip()
                     
                     if response:
                         rospy.logdebug(f"📥 收到响应: {response}")
@@ -251,19 +274,29 @@ class ServoController:
     def initialize_servo(self) -> bool:
         """
         初始化舵机（设置为伺服模式 Mode=3）
+        注意：某些舵机可能不支持此命令，但不影响正常使用
         
         Returns:
             是否成功
         """
-        rospy.loginfo("🔧 初始化舵机...")
+        rospy.loginfo("🔧 初始化舵机（设置为伺服模式）...")
         command = self.CMD_SET_MODE.format(self.SERVO_ID, 3)
-        response = self._send_raw_command(command)
+        response = self._send_raw_command(command, retry=2)
         
-        if response and "OK" in response:
-            rospy.loginfo("✅ 舵机初始化成功（伺服模式）")
-            return True
+        # 检查响应
+        if response:
+            if "OK" in response or "ok" in response.lower():
+                rospy.loginfo("✅ 舵机初始化成功（伺服模式）")
+                return True
+            elif response.startswith("#"):
+                # 有些舵机返回的是回显而不是OK
+                rospy.loginfo(f"✅ 舵机已响应初始化命令: {response}")
+                return True
+            else:
+                rospy.logwarn(f"⚠️ 舵机初始化响应异常: {response}")
+                return False
         else:
-            rospy.logwarn(f"⚠️ 舵机初始化失败或无响应: {response}")
+            rospy.logwarn("⚠️ 舵机初始化无响应（可能舵机已在正确模式）")
             return False
     
     def angle_to_pulse(self, angle: float) -> int:
@@ -311,13 +344,34 @@ class ServoController:
         command = self.CMD_MOVE_TIME.format(self.SERVO_ID, pulse, self.move_duration)
         
         rospy.loginfo(f"🎯 移动舵机到 {angle:.1f}° (脉宽: {pulse})")
-        response = self.send_command(command)
         
-        if response and "OK" in response:
-            rospy.loginfo(f"✅ 舵机已移动到 {angle:.1f}°")
-            return True
-        else:
-            rospy.logwarn(f"⚠️ 移动舵机失败: {response}")
+        # 使用底层命令发送（不检查响应，因为移动命令可能不返回OK）
+        if not self.serial_conn or not self.serial_conn.is_open:
+            rospy.logwarn("⚠️ 串口未连接")
+            return False
+        
+        try:
+            with self.lock:
+                # 清空缓冲区
+                self.serial_conn.flushInput()
+                self.serial_conn.flushOutput()
+                
+                # 发送移动命令
+                self.serial_conn.write(command.encode())
+                rospy.loginfo(f"📤 已发送移动命令: {command.strip()}")
+                
+                # 短暂等待，读取可能的响应（但不强制要求）
+                time.sleep(0.05)
+                if self.serial_conn.in_waiting > 0:
+                    response = self.serial_conn.read(self.serial_conn.in_waiting).decode('utf-8', errors='ignore').strip()
+                    rospy.logdebug(f"📥 舵机响应: {response}")
+                
+                # 假设命令已成功发送（舵机会执行，即使不返回确认）
+                rospy.loginfo(f"✅ 舵机移动命令已发送，目标: {angle:.1f}°")
+                return True
+                
+        except Exception as e:
+            rospy.logerr(f"❌ 发送移动命令失败: {e}")
             return False
     
     def grip(self) -> bool:

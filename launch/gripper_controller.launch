@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <launch>
   <!-- 夹爪控制器节点 -->
-  <node name="gripper_controller" pkg="gripper_controller" type="gripper_controller_node.py" output="screen">
+  <node name="gripper_controller" pkg="gripper_controller" type="gripper_controller_node_v2.py" output="screen">
     <!-- 串口参数 -->
     <param name="serial_port" value="/dev/ttyUSB0" />
     <param name="baudrate" value="115200" />
