@@ -7,10 +7,11 @@ Gripper Controller Node
 - Action Server：处理抓取和释放动作
 - 串口通信：通过USB TTL模块与夹爪舵机通信
 - 状态发布：1Hz发布夹爪在线状态和位置
+- 抓取检测：通过角度判断是否成功抓到球
 
 作者：ROS Developer
 日期：2025-10-02
-版本：1.0.0
+版本：2.0.0
 """
 
 import rospy
@@ -20,6 +21,7 @@ import time
 from typing import Optional
 
 import actionlib
+from std_msgs.msg import Header
 from gripper_controller.msg import GripperStatus, GripperControlAction, GripperControlGoal, GripperControlResult, GripperControlFeedback
 
 
@@ -40,9 +42,10 @@ class ServoController:
         self.lock = threading.Lock()
         
         # 角度参数 (可修改)
-        self.grip_angle = 89      # 抓取角度 (度)
-        self.release_angle = 60  # 释放角度 (度)
-        self.MOVE_DURI = 1000    # 作动耗时
+        self.grip_angle = 89                    # 抓取角度 (度)
+        self.release_angle = 60                 # 释放角度 (度)
+        self.grip_success_threshold = 75.0     # 抓取成功判定阈值 (度)
+        self.MOVE_DURI = 1000                   # 作动耗时 (毫秒)
         
         # 连接串口
         self.connect()
@@ -179,7 +182,7 @@ class ServoController:
     
     def release(self) -> bool:
         """执行释放动作"""
-        rospy.loginfo(f"🖐️ Executing release action (angle: {self.release_angle}°)")
+        rospy.loginfo(f"��️ Executing release action (angle: {self.release_angle}°)")
         return self.move_to_angle(self.release_angle)
     
     def read_position(self) -> Optional[int]:
@@ -240,8 +243,11 @@ class GripperControllerNode:
         self.port = rospy.get_param('~serial_port', '/dev/ttyUSB0')
         self.baudrate = rospy.get_param('~baudrate', 115200)
         self.LOG_SEC = 1
+        
         # 初始化舵机控制器
         self.servo = ServoController(self.port, self.baudrate)
+        
+        rospy.loginfo(f"🎯 Grip success threshold: {self.servo.grip_success_threshold}°")
         
         # 初始化Action Server
         self.action_server = actionlib.SimpleActionServer(
@@ -264,6 +270,29 @@ class GripperControllerNode:
         rospy.loginfo("🎯 Action server started: /gripper_control")
         rospy.loginfo("📡 Publishing status to: /gripper_status")
     
+    def check_grip_success(self) -> bool:
+        """
+        检查抓取是否成功（通过检测夹爪角度）
+        
+        Returns:
+            True: 成功抓到球（夹爪角度 >= 阈值）
+            False: 未抓到球（夹爪角度 < 阈值）
+        """
+        current_angle = self.servo.get_current_angle()
+        
+        if current_angle is None:
+            rospy.logwarn("⚠️ Cannot read gripper angle, assuming grip failed")
+            return False
+        
+        success = current_angle >= self.servo.grip_success_threshold
+        
+        if success:
+            rospy.loginfo(f"✅ Grip SUCCESS: angle={current_angle:.1f}° >= threshold={self.servo.grip_success_threshold}°")
+        else:
+            rospy.logwarn(f"❌ Grip FAILED: angle={current_angle:.1f}° < threshold={self.servo.grip_success_threshold}°")
+        
+        return success
+    
     def execute_action(self, goal: GripperControlGoal):
         """
         执行Action请求
@@ -272,6 +301,7 @@ class GripperControllerNode:
             goal: Action目标
         """
         rospy.loginfo(f"📨 Received gripper action: {goal.command}")
+        rospy.loginfo(f"🕐 Goal timestamp: {goal.header.stamp.secs}.{goal.header.stamp.nsecs}")
         
         # 创建反馈和结果消息
         feedback = GripperControlFeedback()
@@ -282,15 +312,29 @@ class GripperControllerNode:
             if goal.command == GripperControlGoal.GRIP:
                 rospy.loginfo("🎯 Executing GRIP action...")
                 success = self.servo.grip()
-                action_name = "grip"
+                action_name = "GRIP"
+                
+                # 等待夹爪移动完成
+                rospy.sleep(1.2)  # 等待稍长于 MOVE_DURI
+                
+                # 检查是否成功抓到球
+                if success:
+                    result.cmd_success = self.check_grip_success()
+                else:
+                    result.cmd_success = False
+                    rospy.logwarn("❌ Servo command failed, grip unsuccessful")
+                
             elif goal.command == GripperControlGoal.RELEASE:
-                rospy.loginfo("🎯 Executing RELEASE action...")
+                rospy.loginfo("�� Executing RELEASE action...")
                 success = self.servo.release()
-                action_name = "release"
+                action_name = "RELEASE"
+                
+                # 释放动作始终返回成功
+                result.cmd_success = True if success else False
+                
             else:
                 rospy.logwarn(f"⚠️ Unknown action command: {goal.command}")
-                result.success = False
-                result.message = f"Unknown command: {goal.command}"
+                result.cmd_success = False
                 self.action_server.set_aborted(result)
                 return
             
@@ -301,29 +345,28 @@ class GripperControllerNode:
                     self.action_server.set_preempted()
                     return
                 
-                # 获取当前位置作为反馈
-                current_pulse = self.servo.read_position()
-                if current_pulse is not None:
-                    feedback.current_position = current_pulse
+                # 获取当前位置作为反馈（转换为角度）
+                current_angle = self.servo.get_current_angle()
+                if current_angle is not None:
+                    feedback.header = Header()
+                    feedback.header.stamp = rospy.Time.now()
+                    feedback.header.frame_id = "gripper_base"
+                    feedback.gripper_position_deg = int(current_angle)
                     self.action_server.publish_feedback(feedback)
                 
                 rospy.sleep(0.1)
             
             # 设置结果
-            result.success = success
-            if success:
-                result.message = f"Successfully executed {action_name} action"
-                rospy.loginfo(f"✅ {action_name.capitalize()} action completed successfully")
+            if result.cmd_success:
+                rospy.loginfo(f"✅ {action_name} action completed successfully")
                 self.action_server.set_succeeded(result)
             else:
-                result.message = f"Failed to execute {action_name} action"
-                rospy.logwarn(f"❌ {action_name.capitalize()} action failed")
+                rospy.logwarn(f"❌ {action_name} action failed")
                 self.action_server.set_aborted(result)
                 
         except Exception as e:
             rospy.logerr(f"❌ Action execution error: {e}")
-            result.success = False
-            result.message = f"Action execution error: {str(e)}"
+            result.cmd_success = False
             self.action_server.set_aborted(result)
     
     def publish_status(self, event):
@@ -363,7 +406,7 @@ class GripperControllerNode:
             
             # 日志输出 (降低频率)
             if hasattr(self, '_last_log_time'):
-                if time.time() - self._last_log_time > self.LOG_SEC:  # 每5秒输出一次
+                if time.time() - self._last_log_time > self.LOG_SEC:  # 每LOG_SEC秒输出一次
                     if status.is_online:
                         angle = self.servo.pulse_to_angle(status.position)
                         state_name = "GRIP" if status.state == GripperStatus.GRIP_STATE else "RELEASE"
@@ -394,6 +437,7 @@ class GripperControllerNode:
         """主运行循环"""
         rospy.loginfo("🚀 Gripper Controller Node running...")
         rospy.loginfo(f"🔌 Serial port: {self.port}@{self.baudrate}")
+        rospy.loginfo(f"🎯 Grip success threshold: {self.servo.grip_success_threshold}°")
         rospy.loginfo("💡 Usage:")
         rospy.loginfo("  - Send action to /gripper_control")
         rospy.loginfo("  - Monitor status at /gripper_status")
