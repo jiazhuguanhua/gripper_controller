@@ -42,10 +42,10 @@ class ServoController:
         self.lock = threading.Lock()
         
         # 角度参数 (可修改)
-        self.grip_angle = 89                    # 抓取角度 (度)
-        self.release_angle = 60                 # 释放角度 (度)
-        self.grip_success_threshold = 75.0     # 抓取成功判定阈值 (度)
-        self.MOVE_DURI = 1000                   # 作动耗时 (毫秒)
+        self.grip_angle = pulse_to_angle(750)                    # 抓取角度 (度)
+        self.release_angle = pulse_to_angle(1138)                 # 释放角度 (度)
+        self.grip_success_threshold = pulse_to_angle(800)     # 抓取成功判定阈值 (度)
+        self.MOVE_DURI = 500                   # 作动耗时 (毫秒)
         
         # 连接串口
         self.connect()
