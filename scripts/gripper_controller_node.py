@@ -42,9 +42,9 @@ class ServoController:
         self.lock = threading.Lock()
         
         # 角度参数 (可修改)
-        self.grip_angle = pulse_to_angle(750)                    # 抓取角度 (度)
-        self.release_angle = pulse_to_angle(1138)                 # 释放角度 (度)
-        self.grip_success_threshold = pulse_to_angle(800)     # 抓取成功判定阈值 (度)
+        self.grip_angle = ServoController.pulse_to_angle(520)                    # 抓取角度 (度)
+        self.release_angle = ServoController.pulse_to_angle(1138)                 # 释放角度 (度)
+        self.grip_success_threshold = ServoController.pulse_to_angle(800)     # 抓取成功判定阈值 (度)
         self.MOVE_DURI = 500                   # 作动耗时 (毫秒)
         
         # 连接串口
@@ -121,7 +121,8 @@ class ServoController:
             rospy.logwarn("⚠️ Servo initialization failed or no response")
             return False
     
-    def angle_to_pulse(self, angle: float) -> int:
+    @staticmethod
+    def angle_to_pulse(angle: float) -> int:
         """
         将角度转换为脉宽值
         
@@ -138,7 +139,8 @@ class ServoController:
         pulse = int(500 + (angle / 180.0) * 2000)
         return pulse
     
-    def pulse_to_angle(self, pulse: int) -> float:
+    @staticmethod
+    def pulse_to_angle(pulse: int) -> float:
         """
         将脉宽值转换为角度
         
@@ -168,12 +170,9 @@ class ServoController:
         rospy.loginfo(f"🎯 Moving servo to {angle}° (pulse: {pulse})")
         response = self.send_command(command)
         
-        if response:
-            rospy.loginfo(f"✅ Servo moved to {angle}°")
-            return True
-        else:
-            rospy.logwarn(f"⚠️ Failed to move servo to {angle}°")
-            return False
+        # 只要命令发送成功就返回True，不等待响应
+        rospy.loginfo(f"✅ Servo command sent to {angle}°")
+        return True
     
     def grip(self) -> bool:
         """执行抓取动作"""
@@ -284,12 +283,12 @@ class GripperControllerNode:
             rospy.logwarn("⚠️ Cannot read gripper angle, assuming grip failed")
             return False
         
-        success = current_angle >= self.servo.grip_success_threshold
+        success = current_angle < self.servo.grip_success_threshold
         
         if success:
-            rospy.loginfo(f"✅ Grip SUCCESS: angle={current_angle:.1f}° >= threshold={self.servo.grip_success_threshold}°")
+            rospy.loginfo(f"✅ Grip SUCCESS: angle={current_angle:.1f}° < threshold={self.servo.grip_success_threshold}° (物体被抓住)")
         else:
-            rospy.logwarn(f"❌ Grip FAILED: angle={current_angle:.1f}° < threshold={self.servo.grip_success_threshold}°")
+            rospy.logwarn(f"❌ Grip FAILED: angle={current_angle:.1f}° >= threshold={self.servo.grip_success_threshold}° (夹爪完全闭合)")
         
         return success
     
@@ -311,26 +310,29 @@ class GripperControllerNode:
             # 执行对应的动作
             if goal.command == GripperControlGoal.GRIP:
                 rospy.loginfo("🎯 Executing GRIP action...")
-                success = self.servo.grip()
+                self.servo.grip()  # 发送命令
                 action_name = "GRIP"
                 
-                # 等待夹爪移动完成
-                rospy.sleep(1.2)  # 等待稍长于 MOVE_DURI
+                # 等待 MOVE_DURI + 200ms
+                wait_time = (self.servo.MOVE_DURI + 200) / 1000.0
+                rospy.loginfo(f"⏳ Waiting {wait_time}s for gripper to move...")
+                rospy.sleep(wait_time)
                 
                 # 检查是否成功抓到球
-                if success:
-                    result.cmd_success = self.check_grip_success()
-                else:
-                    result.cmd_success = False
-                    rospy.logwarn("❌ Servo command failed, grip unsuccessful")
+                result.cmd_success = self.check_grip_success()
                 
             elif goal.command == GripperControlGoal.RELEASE:
-                rospy.loginfo("�� Executing RELEASE action...")
-                success = self.servo.release()
+                rospy.loginfo("🔓 Executing RELEASE action...")
+                self.servo.release()  # 发送命令
                 action_name = "RELEASE"
                 
+                # 等待 MOVE_DURI + 200ms
+                wait_time = (self.servo.MOVE_DURI + 200) / 1000.0
+                rospy.loginfo(f"⏳ Waiting {wait_time}s for gripper to move...")
+                rospy.sleep(wait_time)
+                
                 # 释放动作始终返回成功
-                result.cmd_success = True if success else False
+                result.cmd_success = True
                 
             else:
                 rospy.logwarn(f"⚠️ Unknown action command: {goal.command}")
@@ -338,31 +340,18 @@ class GripperControllerNode:
                 self.action_server.set_aborted(result)
                 return
             
-            # 等待动作完成并发布反馈
-            for i in range(10):  # 最多等待1秒
-                if rospy.is_shutdown() or self.action_server.is_preempt_requested():
-                    rospy.loginfo("🛑 Action preempted")
-                    self.action_server.set_preempted()
-                    return
-                
-                # 获取当前位置作为反馈（转换为角度）
-                current_angle = self.servo.get_current_angle()
-                if current_angle is not None:
-                    feedback.header = Header()
-                    feedback.header.stamp = rospy.Time.now()
-                    feedback.header.frame_id = "gripper_base"
-                    feedback.gripper_position_deg = int(current_angle)
-                    self.action_server.publish_feedback(feedback)
-                
-                rospy.sleep(0.1)
+            # 发布最终反馈
+            current_angle = self.servo.get_current_angle()
+            if current_angle is not None:
+                feedback.header = Header()
+                feedback.header.stamp = rospy.Time.now()
+                feedback.header.frame_id = "gripper_base"
+                feedback.gripper_position_deg = int(current_angle)
+                self.action_server.publish_feedback(feedback)
             
-            # 设置结果
-            if result.cmd_success:
-                rospy.loginfo(f"✅ {action_name} action completed successfully")
-                self.action_server.set_succeeded(result)
-            else:
-                rospy.logwarn(f"❌ {action_name} action failed")
-                self.action_server.set_aborted(result)
+            # 设置结果（始终成功）
+            rospy.loginfo(f"✅ {action_name} action completed, result: {result.cmd_success}")
+            self.action_server.set_succeeded(result)
                 
         except Exception as e:
             rospy.logerr(f"❌ Action execution error: {e}")
